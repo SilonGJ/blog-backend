@@ -23,14 +23,12 @@ export default {
 				});
 			}
 
-			await env.D1.exec(`
-				CREATE TABLE IF NOT EXISTS view_dedup (
-					hash       TEXT PRIMARY KEY,
-					slug       TEXT NOT NULL,
-					created_at INTEGER NOT NULL
-				);
-				CREATE INDEX IF NOT EXISTS idx_dedup_created ON view_dedup(created_at);
-			`);
+			if (!env.VIEW_SALT) {
+				return new Response(JSON.stringify({ error: "Server misconfigured" }), {
+					status: 500,
+					headers: { "Content-Type": "application/json" },
+				});
+			}
 
 			const url = new URL(request.url);
 			const path = url.pathname;
