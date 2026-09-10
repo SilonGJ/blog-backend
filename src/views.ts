@@ -44,28 +44,17 @@ export async function incrementViews(slug: string, request: Request, env: Env): 
 	const hash = await computeHash(slug, ip, ua, env.VIEW_SALT);
 	const now = Math.floor(Date.now() / 1000);
 
-	const existing = await env.D1.prepare("SELECT hash FROM view_dedup WHERE hash = ? AND slug = ?")
-		.bind(hash, slug)
-		.first();
-
-	if (existing) {
-		const row = await env.D1.prepare("SELECT count FROM article_views WHERE slug = ?")
-			.bind(slug)
-			.first<{ count: number }>();
-		return json({ count: row?.count ?? 0 });
-	}
-
-	await env.D1.batch([
-		env.D1.prepare("INSERT INTO view_dedup (hash, slug, created_at) VALUES (?, ?, ?)").bind(hash, slug, now),
+	const results = await env.D1.batch([
+		env.D1.prepare("INSERT OR IGNORE INTO view_dedup (hash, slug, created_at) VALUES (?, ?, ?)").bind(hash, slug, now),
 		env.D1.prepare(
 			`INSERT INTO article_views (slug, count) VALUES (?, 1)
-			 ON CONFLICT(slug) DO UPDATE SET count = count + 1, updated_at = CURRENT_TIMESTAMP`,
+			 ON CONFLICT(slug) DO UPDATE SET count = count + 1, updated_at = CURRENT_TIMESTAMP
+			 WHERE (SELECT changes()) > 0`,
 		).bind(slug),
+		env.D1.prepare("SELECT count FROM article_views WHERE slug = ?").bind(slug),
 	]);
 
-	const row = await env.D1.prepare("SELECT count FROM article_views WHERE slug = ?")
-		.bind(slug)
-		.first<{ count: number }>();
+	const row = (results[2]?.results as any)?.[0];
 	return json({ count: row?.count ?? 1 });
 }
 
