@@ -3,6 +3,7 @@ import { getViews, incrementViews, getViewsBatch, cleanupDedup } from "./views";
 export interface Env {
 	D1: D1Database;
 	VIEW_SALT: string;
+	CORS_ORIGIN?: string;
 }
 
 const ROUTE_PATTERNS = {
@@ -10,46 +11,64 @@ const ROUTE_PATTERNS = {
 	single: /^\/api\/views\/([^/]+)$/,
 };
 
+function addCorsHeaders(response: Response, origin: string): Response {
+	const headers = new Headers(response.headers);
+	headers.set("Access-Control-Allow-Origin", origin);
+	return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
+
 export default {
 	async fetch(request: Request, env: Env): Promise<Response> {
-		try {
-			if (request.method === "OPTIONS") {
-				return new Response(null, {
-					headers: {
-						"Access-Control-Allow-Origin": "*",
-						"Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-						"Access-Control-Allow-Headers": "Content-Type",
-					},
-				});
-			}
+		const allowedOrigin = env.CORS_ORIGIN || "*";
 
+		if (request.method === "OPTIONS") {
+			return new Response(null, {
+				headers: {
+					"Access-Control-Allow-Origin": allowedOrigin,
+					"Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+					"Access-Control-Allow-Headers": "Content-Type",
+				},
+			});
+		}
+
+		try {
 			if (!env.VIEW_SALT) {
-				return new Response(JSON.stringify({ error: "Server misconfigured" }), {
-					status: 500,
-					headers: { "Content-Type": "application/json" },
-				});
+				return addCorsHeaders(
+					new Response(JSON.stringify({ error: "Server misconfigured" }), {
+						status: 500,
+						headers: { "Content-Type": "application/json" },
+					}),
+					allowedOrigin,
+				);
 			}
 
 			const url = new URL(request.url);
 			const path = url.pathname;
+			let response: Response;
 
 			if (path === "/api/views/batch" && request.method === "POST") {
-				return getViewsBatch(request, env.D1);
+				response = await getViewsBatch(request, env.D1);
+			} else {
+				const singleMatch = path.match(ROUTE_PATTERNS.single);
+				if (singleMatch) {
+					const slug = decodeURIComponent(singleMatch[1]);
+					if (request.method === "GET") response = await getViews(slug, env.D1);
+					else if (request.method === "POST") response = await incrementViews(slug, request, env);
+					else response = new Response("Not Found", { status: 404 });
+				} else {
+					response = new Response("Not Found", { status: 404 });
+				}
 			}
 
-			const singleMatch = path.match(ROUTE_PATTERNS.single);
-			if (singleMatch) {
-				const slug = decodeURIComponent(singleMatch[1]);
-				if (request.method === "GET") return getViews(slug, env.D1);
-				if (request.method === "POST") return incrementViews(slug, request, env);
-			}
-
-			return new Response("Not Found", { status: 404 });
+			return addCorsHeaders(response, allowedOrigin);
 		} catch (e) {
-			return new Response(JSON.stringify({ error: "Internal error" }), {
-				status: 500,
-				headers: { "Content-Type": "application/json" },
-			});
+			return addCorsHeaders(
+				new Response(JSON.stringify({ error: "Internal error" }), {
+					status: 500,
+					headers: { "Content-Type": "application/json" },
+				}),
+				allowedOrigin,
+			);
 		}
 	},
 
