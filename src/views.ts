@@ -46,16 +46,21 @@ export async function incrementViews(slug: string, request: Request, env: Env): 
 
 	const results = await env.D1.batch([
 		env.D1.prepare("INSERT OR IGNORE INTO view_dedup (hash, slug, created_at) VALUES (?, ?, ?)").bind(hash, slug, now),
-		env.D1.prepare(
-			`INSERT INTO article_views (slug, count) VALUES (?, 1)
-			 ON CONFLICT(slug) DO UPDATE SET count = count + 1, updated_at = CURRENT_TIMESTAMP
-			 WHERE (SELECT changes()) > 0`,
-		).bind(slug),
 		env.D1.prepare("SELECT count FROM article_views WHERE slug = ?").bind(slug),
 	]);
 
-	const row = (results[2]?.results as any)?.[0];
-	return json({ count: row?.count ?? 1 });
+	const isNew = (results[0] as any).meta?.changes > 0;
+	let count = (results[1]?.results as any)?.[0]?.count ?? 0;
+
+	if (isNew) {
+		await env.D1.prepare(
+			`INSERT INTO article_views (slug, count) VALUES (?, 1)
+			 ON CONFLICT(slug) DO UPDATE SET count = count + 1, updated_at = CURRENT_TIMESTAMP`,
+		).bind(slug).run();
+		count += 1;
+	}
+
+	return json({ count });
 }
 
 export async function getViewsBatch(request: Request, d1: D1Database): Promise<Response> {
